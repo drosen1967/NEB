@@ -5,6 +5,8 @@ from scipy.signal import convolve2d, remez,oaconvolve
 from scipy.interpolate import RegularGridInterpolator as RGI
 from sympy import *
 from PIL import Image
+from minimization_methods import minimize_nag
+import time
 
 MtEvansPeak = np.array([2866,1255])
 MtBierstadtPeak = np.array([693,1883])
@@ -24,7 +26,7 @@ def test_NEB():
 
 class NEB:
     '''
-    optimziation locations stored by variable x as shape n by m
+    optimziation locations stored by variable x as shape m by n
     '''
     def __init__(self, x, k=1e-2, spring_type = 'quadratic', projected = False):
         self.x , self.spring_type, self.k, self.projected = x, spring_type,k,projected
@@ -39,8 +41,8 @@ class NEB:
         X[1:-1,:] = x.reshape(self.m-2,self.n)
         left  = X[0:-1,:]
         right = X[1:,  :]
-        spring_potential = np.linalg.norm(left - right, axis=1)
-        return np.sum(spring_potential * self.k)
+        spring_potential = np.linalg.norm(left - right, axis=1)**2
+        return np.sum(spring_potential * 0.5 * self.k)
     
     def quad_spring_gradient(self, x = None):
         if x is None: x = self.x[1:-1,:].flatten()
@@ -78,7 +80,6 @@ class NEB:
         if self.spring_type == 'linear':
             spring = self.linear_spring_gradient(x) 
         if x is None: x = self.x[1:-1,:].flatten()
-        
         spring = spring.reshape(self.m-2,self.n)
         objective = objective.reshape(self.m-2,self.n)
         
@@ -156,13 +157,13 @@ def test_MinMap():
     m = 80
     blend = np.linspace(0, 1, m)
     X = np.outer(blend, MtEvansPeak) + np.outer(1-blend,MtBierstadtPeak)
-    N = MinMap(X,filter = None, k = 4, projected=False)
+    N = MinMap(X,filter = None, k = 0.5, projected=False)
     N.plot()
-    N.minimize()
+    N.minimize(method='NAG')
     N.plot()
 
 class MinMap(NEB):
-    def __init__(self, x, filter=None, k=.1, spring_type = 'quadratic', projected = True,mapfile = 'final.tif'
+    def __init__(self, x, filter=None, k=.01, spring_type = 'quadratic', projected = True,mapfile = 'final.tif'
                  ):
         self.x , self.spring_type, self.k, self.projected = x, spring_type, k, projected
         self.mapfile = mapfile
@@ -194,22 +195,29 @@ class MinMap(NEB):
         if x is None: x = self.x[1:-1,:].flatten()
         X = self.x
         X[1:-1,:] = x.reshape(self.m-2,self.n)
-        e = np.ones(X.shape[0]) * self.eps
-        z = np.zeros_like(e)
-        e1 = np.vstack([e,z]).T
-        e2 = np.vstack([z,e]).T
+        G = np.zeros_like(X)
         g0 = self.obj_cost(X[1:-1])
-        g1 = self.obj_cost((X + e1)[1:-1,:])
-        g2 = self.obj_cost((X + e2)[1:-1,:])
-        G = np.vstack([g1-g0,g2-g0])[:,1:-1].T
-        return G.flatten()/self.eps
+        for i in range(self.m-2):
+            e = np.zeros_like(X)
+            e[i+1,0] = self.eps
+            g1 = self.obj_cost((X + e)[1:-1,:])
+            G[i+1,0] = g1-g0
+            e[i+1,0] = 0.0
+            e[i+1,1] = self.eps
+            g1 = self.obj_cost((X + e)[1:-1,:])
+            G[i+1,1] = g1-g0
+        return G[1:-1].flatten()/self.eps
 
-    def minimize(self):
+    def minimize(self, method = None):
         x0 = self.x[1:-1,:].flatten()
         fun = self.cost
-        result = minimize(fun,x0,method='Nelder-Mead')
-        self.x[1:-1,:] = result.x.reshape(self.m-2,self.n)
-        self.solved = result.success
+        if method is None:
+            result = minimize(fun,x0,method='Nelder-Mead')
+            self.x[1:-1,:] = result.x.reshape(self.m-2,self.n)
+            self.solved = result.success
+        elif method == 'NAG':
+            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-5, mom_parameter=0.1)
+            self.x[1:-1,:] = result['x']
         print(result)
 
     def plot(self):
@@ -220,8 +228,8 @@ class MinMap(NEB):
         plt.plot(self.x[:,0], self.x[:,1])
         plt.show()
 
-        
     
+        
 
 if __name__=='__main__':
     #test_NEB()
