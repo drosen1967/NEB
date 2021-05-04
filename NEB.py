@@ -5,11 +5,12 @@ from scipy.signal import convolve2d, remez,oaconvolve
 from scipy.interpolate import RegularGridInterpolator as RGI
 from sympy import *
 from PIL import Image
-from minimization_methods import minimize_nag
+from minimization_methods import minimize_nag, minimize_lbfgs
 import time
 
 MtEvansPeak = np.array([2866,1255])
 MtBierstadtPeak = np.array([693,1883])
+Lakeside = np.array([1093,1200])
 Downhill = np.array([3800, 2500])
 #Downhill = np.array([1312, 1371])
 #MtBierstadtPeak = np.array([3500,2500])
@@ -157,13 +158,23 @@ class Catenary(NEB):
 #}}}
 #{{{ MinMap
 def test_MinMap():
-    m = 80
-    blend = np.linspace(0, 1, m)
-    X = np.outer(blend, MtEvansPeak) + np.outer(1-blend,MtBierstadtPeak)
-    N = MinMap(X,filter = None, k = 0.5, projected=False)
+    m = 100
+    blend = np.linspace(0, 1, m//2 + 1)
+    X1 = np.outer(blend, MtEvansPeak) + np.outer(1-blend,Lakeside)
+    X2 = np.outer(blend,Lakeside) + np.outer(1-blend,MtBierstadtPeak)
+    X = np.vstack([X2[:-1,:],X1[1:,:]])
+    print(X.shape)
+    #N = MinMap(X,filter =.1, k = 8e-1, projected=True) # For NAG
+    N = MinMap(X,filter =.1, k = 1e-4, projected=True)
+    print(N.obj_cost())
     N.plot()
-    N.minimize(method='NAG')
+    pre = N.return_height()
+    N.minimize(method='BFGS')
     N.plot()
+    post = N.return_height()
+    plt.plot(pre)
+    plt.plot(post)
+    plt.show()
 
 class MinMap(NEB):
     def __init__(self, x, filter=None, k=.01, spring_type = 'quadratic', projected = True,mapfile = 'final.tif'
@@ -175,6 +186,7 @@ class MinMap(NEB):
         self.solved = False
         self.eps = 1e-5
         self.image = np.array(Image.open(self.mapfile))
+        self.original = np.copy(self.image)
         if filter is not None:
             numtaps = 129
             filt = remez(numtaps, [0,filter-.02,filter+.02, .5],desired = [1,1e-4])
@@ -192,24 +204,27 @@ class MinMap(NEB):
         X[1:-1,:] = x.reshape(self.m-2,self.n)
         values = self.map(X)
         return -np.sum(values)
-        
+
+    def return_height(self, x = None):
+        if x is None: x = self.x[1:-1,:]
+        X = self.x
+        X[1:-1,:] = x.reshape(self.m-2,self.n)
+        values = self.map(X)
+        return values  
     
     def obj_gradient(self, x = None):
         if x is None: x = self.x[1:-1,:].flatten()
         X = self.x
         X[1:-1,:] = x.reshape(self.m-2,self.n)
-        G = np.zeros_like(X)
-        g0 = self.obj_cost(X[1:-1])
-        for i in range(self.m-2):
-            e = np.zeros_like(X)
-            e[i+1,0] = self.eps
-            g1 = self.obj_cost((X + e)[1:-1,:])
-            G[i+1,0] = g1-g0
-            e[i+1,0] = 0.0
-            e[i+1,1] = self.eps
-            g1 = self.obj_cost((X + e)[1:-1,:])
-            G[i+1,1] = g1-g0
-        return G[1:-1].flatten()/self.eps
+        step_right = np.vstack([self.eps * np.ones(X.shape[0]),np.zeros(X.shape[0])]).T
+        step_up    = np.vstack([np.zeros(X.shape[0]),self.eps * np.ones(X.shape[0])]).T
+        center = np.copy(X)
+        up = np.copy(X) + step_up
+        right = np.copy(X) + step_right
+        center_height = self.map(X)
+        hill_gradient = np.vstack([self.map(right) - center_height, self.map(up)- center_height]).T * 1./self.eps
+        hill_gradient = hill_gradient[1:-1,:]
+        return -hill_gradient.flatten() * 100
 
     def minimize(self, method = None):
         x0 = self.x[1:-1,:].flatten()
@@ -219,12 +234,15 @@ class MinMap(NEB):
             self.x[1:-1,:] = result.x.reshape(self.m-2,self.n)
             self.solved = result.success
         elif method == 'NAG':
-            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-5, mom_parameter=0.1)
+            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-5, mom_parameter=0.1,maxiter=1000)
+            self.x[1:-1,:] = result['x']
+        elif method == 'BFGS':
+            result = minimize_lbfgs(fun,x0,jac=self.gradient, stepsize=None, alpha = .1, m = 5,maxiter=100)
             self.x[1:-1,:] = result['x']
         print(result)
 
     def plot(self):
-        plt.imshow(self.image,cmap='jet')
+        plt.imshow(self.original,cmap='jet')
         plt.scatter(self.x[0,0],self.x[0,1],color='b')
         plt.scatter(self.x[-1,0],self.x[-1,1],color='b')
         plt.scatter(self.x[1:-1,0],self.x[1:-1,1],color='r')
@@ -234,14 +252,14 @@ class MinMap(NEB):
 #}}}    
 #{{{ 
 def test_ConstantSlope():
-    m = 5000
+    m = 50
     blend = np.linspace(0, 1, m)
     X = np.outer(blend, MtEvansPeak) + np.outer(1-blend,Downhill)
-    N = ConstantSlope(X,filter = .45, k = 10e2, projected=False)
+    N = ConstantSlope(X,filter = .1, k = 2e-3, projected=False)
     elevation_change = np.abs(np.diff(N.map(np.vstack([MtEvansPeak, Downhill]))))
-    distance = np.linalg.norm(MtEvansPeak - Downhill) * 5
+    distance = np.linalg.norm(MtEvansPeak - Downhill) 
     av_slope = elevation_change/distance
-    N.goal_slope = av_slope * 1/4
+    N.goal_slope = av_slope * 1
     N.plot()
     N.minimize(method='NAG')
     N.plot()
@@ -305,7 +323,7 @@ class ConstantSlope(NEB):
         up = np.copy(X) + step_up
         right = np.copy(X) + step_right
         center_height = self.map(X)
-        hill_gradient = np.vstack([self.map(up) - center_height, self.map(right) - center_height]).T * 1./self.eps
+        hill_gradient = np.vstack([self.map(right) - center_height, self.map(up)- center_height]).T * 1./self.eps
         # Compute gradient from sheet:
         backward_point = X[:-2,:]
         forward_point = X[2:,:]
@@ -363,6 +381,6 @@ class ConstantSlope(NEB):
 if __name__=='__main__':
     #test_NEB()
     #test_Catenary()
-    #test_MinMap()
-    test_ConstantSlope()
+    test_MinMap()
+    #test_ConstantSlope()
 
