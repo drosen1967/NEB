@@ -8,6 +8,9 @@ from PIL import Image
 from minimization_methods import minimize_nag, minimize_lbfgs
 import time
 
+
+plt.rcParams.update({'font.size': 22})
+
 MtEvansPeak = np.array([2866,1255])
 MtBierstadtPeak = np.array([693,1883])
 Lakeside = np.array([1093,1200])
@@ -165,7 +168,7 @@ def test_MinMap():
     X = np.vstack([X2[:-1,:],X1[1:,:]])
     print(X.shape)
     #N = MinMap(X,filter =.1, k = 8e-1, projected=True) # For NAG
-    N = MinMap(X,filter =.1, k = 1e-4, projected=True)
+    N = MinMap(X,filter =.1, k = 1e-2, projected=True)
     print(N.obj_cost())
     N.plot()
     pre = N.return_height()
@@ -175,6 +178,50 @@ def test_MinMap():
     plt.plot(pre)
     plt.plot(post)
     plt.show()
+
+def final_MinMap():
+    m = 100
+    blend = np.linspace(0, 1, m//2 + 1)
+    X1 = np.outer(blend, MtEvansPeak) + np.outer(1-blend,Lakeside)
+    X2 = np.outer(blend,Lakeside) + np.outer(1-blend,MtBierstadtPeak)
+    X = np.vstack([X2[:-1,:],X1[1:,:]])
+    print(X.shape)
+    N = MinMap(X,filter =.1, k = 8e-1, projected=True) # For NAG
+    # N = MinMap(X,filter =.1, k = 1e-4, projected=True)
+    print(N.obj_cost())
+    N.plot(title='(a) Initial Path', axis=False, save=True)
+    pre = N.return_height()
+    N.minimize(method='NAG')
+    N.plot(title='(b) NAG Result Path', axis=False, save=True)
+    post_nag = N.return_height()
+
+    m = 100
+    blend = np.linspace(0, 1, m//2 + 1)
+    X1 = np.outer(blend, MtEvansPeak) + np.outer(1-blend,Lakeside)
+    X2 = np.outer(blend,Lakeside) + np.outer(1-blend,MtBierstadtPeak)
+    X = np.vstack([X2[:-1,:],X1[1:,:]])
+    print(X.shape)
+    #N = MinMap(X,filter =.1, k = 8e-1, projected=True) # For NAG
+    N = MinMap(X,filter =.1, k = 1e-6, projected=True)
+    print(N.obj_cost())
+    N.plot(title='(a) Initial Path', axis=False,  save=True)
+    pre = N.return_height()
+    N.minimize(method='BFGS')
+    N.plot(title='(c) L-BFGS Result Path', axis=False,  save=True)
+    post_lbfgs = N.return_height()
+
+    plt.plot(pre)
+    plt.tight_layout()
+    plt.gca().set_aspect(0.15)
+    plt.plot(post_nag)
+    plt.plot(post_lbfgs)
+    plt.title('(d) Elevation Comparision')
+    plt.xlabel('Node')
+    plt.ylabel('Elevation (m)')
+    plt.legend(['Initial', 'NAG', 'L-BFGS'])
+    plt.savefig('elevation_comparision', dpi=300, bbox_inches = "tight", )
+
+
 
 class MinMap(NEB):
     def __init__(self, x, filter=None, k=.01, spring_type = 'quadratic', projected = True,mapfile = 'final.tif'
@@ -192,7 +239,7 @@ class MinMap(NEB):
             filt = remez(numtaps, [0,filter-.02,filter+.02, .5],desired = [1,1e-4])
             filt = np.outer(filt,filt)
             plt.imshow(filt)
-            plt.show()
+            # plt.show()
             self.image = oaconvolve(self.image, filt,mode='same')
         self.map = RGI([np.linspace(0,self.image.shape[1]-1,self.image.shape[1]),
                         np.linspace(0,self.image.shape[0]-1,self.image.shape[0])],
@@ -234,19 +281,32 @@ class MinMap(NEB):
             self.x[1:-1,:] = result.x.reshape(self.m-2,self.n)
             self.solved = result.success
         elif method == 'NAG':
-            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-5, mom_parameter=0.1,maxiter=1000)
+            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-5, mom_parameter=0.01,maxiter=1000)
             self.x[1:-1,:] = result['x']
         elif method == 'BFGS':
-            result = minimize_lbfgs(fun,x0,jac=self.gradient, stepsize=None, alpha = .1, m = 5,maxiter=100)
+            result = minimize_lbfgs(fun,x0,jac=self.gradient, stepsize=None, alpha = 0.1, m =20, maxiter=1000)
             self.x[1:-1,:] = result['x']
         print(result)
 
-    def plot(self):
-        plt.imshow(self.original,cmap='jet')
+    def plot(self, title=None, xlabel=None, ylabel=None, axis=True, save=False):
+        im = plt.imshow(self.original,cmap='jet')
+        cbar = plt.colorbar(im, shrink=0.75)
+        cbar.set_label('Elevation (m)')
         plt.scatter(self.x[0,0],self.x[0,1],color='b')
         plt.scatter(self.x[-1,0],self.x[-1,1],color='b')
         plt.scatter(self.x[1:-1,0],self.x[1:-1,1],color='r')
         plt.plot(self.x[:,0], self.x[:,1])
+        if title is not None:
+            plt.title(title)
+        if xlabel is not None:
+            plt.set_xlabel(xlabel)
+        if ylabel is not None:
+            plt.set_ylabel(xlabel)
+        if axis is False:
+            plt.xticks([])
+            plt.yticks([])
+        if save is not False:
+            plt.savefig('minmap_plot' + str(title), dpi=300, bbox_inches = "tight")
         plt.show()
 
 #}}}    
@@ -380,10 +440,10 @@ def test_Brachistochrone():
     m = 50
     blend = np.linspace(0, 1, m)
     X = np.outer(blend,Downhill) + np.outer(1-blend, MtEvansPeak)
-    N = Brachistochrone(X,filter = .1, k = 1e-3, projected=False)
-    N.plot()
-    N.minimize(method=None)
-    N.plot()
+    N = Brachistochrone(X,filter = .1, k = 1e-10, projected=False)
+    N.plot(X)
+    N.minimize(method='NAG')
+    N.plot(N.x)
     N.plot_slope()
     print(X)
 
@@ -402,8 +462,8 @@ class Brachistochrone(NEB):
             numtaps = 129
             filt = remez(numtaps, [0,filter-.02,filter+.02, .5],desired = [1,1e-4])
             filt = np.outer(filt,filt)
-            plt.imshow(filt)
-            plt.show()
+            # plt.imshow(filt)
+            # plt.show()
             self.image = oaconvolve(self.image, filt,mode='same')
         self.map = RGI([np.linspace(0,self.image.shape[1]-1,self.image.shape[1]),
                         np.linspace(0,self.image.shape[0]-1,self.image.shape[0])],
@@ -457,6 +517,7 @@ class Brachistochrone(NEB):
                 grad_l + grad_r
                 + (distance2**2 / delta_h2[1:-1,:]**2) * hill_gradient[1:-1,:]
         ) 
+        print(np.max(grad))
         return grad.flatten()
 
     def minimize(self, method = None):
@@ -467,16 +528,22 @@ class Brachistochrone(NEB):
             self.x[1:-1,:] = result.x.reshape(self.m-2,self.n)
             self.solved = result.success
         elif method == 'NAG':
-            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-5, mom_parameter=0.1,maxiter = 1000)
+            result = minimize_nag(fun,x0,jac=self.gradient, stepsize = 1e-3, mom_parameter=0.1,maxiter = 1000, callback=self.plot)
             self.x[1:-1,:] = result['x']
         print(result)
 
-    def plot(self):
+    def plot(self,xk):
+        # plt.imshow(self.original,cmap='jet')
+        # plt.scatter(self.x[0,0],self.x[0,1],color='b')
+        # plt.scatter(self.x[-1,0],self.x[-1,1],color='b')
+        # plt.scatter(self.x[1:-1,0],self.x[1:-1,1],color='r')
+        # plt.plot(self.x[:,0], self.x[:,1])
+        # plt.show()
         plt.imshow(self.original,cmap='jet')
-        plt.scatter(self.x[0,0],self.x[0,1],color='b')
-        plt.scatter(self.x[-1,0],self.x[-1,1],color='b')
-        plt.scatter(self.x[1:-1,0],self.x[1:-1,1],color='r')
-        plt.plot(self.x[:,0], self.x[:,1])
+        plt.scatter(xk[0,0],xk[0,1],color='b')
+        plt.scatter(xk[-1,0],xk[-1,1],color='b')
+        plt.scatter(xk[1:-1,0],xk[1:-1,1],color='r')
+        plt.plot(xk[:,0], xk[:,1])
         plt.show()
 
 #}}}    
@@ -488,6 +555,7 @@ if __name__=='__main__':
     #test_NEB()
     # test_Catenary()
     # test_MinMap()
+    final_MinMap()
     # test_ConstantSlope()
-    test_Brachistochrone()
+    # test_Brachistochrone()
 

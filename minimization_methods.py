@@ -107,14 +107,14 @@ def minimize_nag(fun, x0, args=(), jac = None, stepsize = 1e-5,
         gfk = jac(xk.reshape((xk.shape[0]//2, 2)), *args)
         gnorm = np.dot(gfk, gfk)**0.5
     
-        print(f_dif)
+        # print(f_dif)
         
         
         # ----------------------
         if return_all:
             allvecs.append(xk)
         if callback is not None:
-            callback(xk)
+            callback(xk.reshape((xk.shape[0]//2, 2)))
             
         
         step = 10**(np.ceil(np.max((np.log10(maxiter)-2.0, 0))))  # show at most 100 lines of information  
